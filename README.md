@@ -78,8 +78,4 @@ This project is licensed under the Apache-2.0 license.
 
 ## Contact
 
-For questions, feedback, or contributions, please feel free to open an issue on the repository.
-
----
-
-Feel free to adjust URLs, screenshots, and additional details as needed for your project.
+For questions, feedback, or contributions, please feel free to open an issue on the repository. -q7
