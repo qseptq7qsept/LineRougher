@@ -45,7 +45,7 @@ Additionally, you will need:
    ```bat
    git clone https://github.com/qseptq7qsept/LineRougher.git
    ```
-https://github.com/qseptq7qsept/LineRougher/
+
 4. **Run the Installation Script:**  
    Navigate into the cloned repository folder and execute `install.bat` to set up the virtual environment and install dependencies:
    ```bat
