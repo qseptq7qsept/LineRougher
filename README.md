@@ -16,7 +16,7 @@ _Roughen up these lines!_
 
 Line Rougher is a tool that converts clean line art into a stylized, scribbled version.
 
-![Interface Screenshot](screenshot/Screenshot.png)
+![Interface Screenshot](screenshot/LR_Screenshot.png)
 
 ## Dependencies
 
