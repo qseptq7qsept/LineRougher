@@ -7,7 +7,7 @@ import random
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QSpinBox, QSlider, QFileDialog, QGraphicsScene, QGraphicsView
+    QLabel, QPushButton, QSpinBox, QSlider, QFileDialog, QGraphicsScene, QGraphicsView, QCheckBox
 )
 from PySide6.QtGui import QImage, QPixmap, QPalette, QColor
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
@@ -25,11 +25,7 @@ def compute_line_alpha_soft_threshold(gray, black_threshold, tolerance):
     lower = float(black_threshold)
     upper = float(black_threshold + tolerance)
 
-    # Region 1: g <= lower => alpha=1
     alpha_f[gray_f <= lower] = 1.0
-
-    # Region 2: g >= upper => alpha=0
-    # Region 3: lower < g < upper => ramp
     in_ramp = (gray_f > lower) & (gray_f < upper)
     alpha_f[in_ramp] = 1.0 - (gray_f[in_ramp] - lower) / (upper - lower)
 
@@ -55,32 +51,35 @@ def to_black_alpha(scribbled_bgr):
       - Black (fully opaque),
       - Semi-transparent black,
       - Fully transparent.
-
     We do this by converting to grayscale and setting:
         alpha = 255 - gray_value
     The RGB channels are set to 0 (black).
     """
     h, w, _ = scribbled_bgr.shape
     gray = cv2.cvtColor(scribbled_bgr, cv2.COLOR_BGR2GRAY)
-    alpha = 255 - gray  # black => alpha=255, white => alpha=0, gray => partial alpha
-
+    alpha = 255 - gray
     result = np.zeros((h, w, 4), dtype=np.uint8)
-    # BGR = 0 => black
-    result[..., 3] = alpha  # store alpha
+    result[..., 3] = alpha
     return result
+
+def multiply_blend(source, processed):
+    """
+    Multiply blend two BGR images: out = (source * processed)/255.
+    """
+    src_f = source.astype(np.float32)
+    proc_f = processed.astype(np.float32)
+    blended = (src_f * proc_f) / 255.0
+    return blended.astype(np.uint8)
 
 class ImageProcessor:
     """
     Transforms a clean line-art image into a rough, scribbly version.
     Also duplicates some lines (per segment) with slight modifications.
-
-    Now uses threshold + tolerance to detect black regions:
-      - We compute a "soft alpha" for each pixel, then create a binary mask from that alpha.
+    Uses threshold + tolerance to detect black regions.
     """
     def __init__(self):
-        # Default scribble parameters
-        self.black_threshold = 72  # replaced old threshold with black_threshold
-        self.tolerance = 20        # new tolerance slider
+        self.black_threshold = 72  
+        self.tolerance = 20        
         self.step_size = 11
         self.noise_amount = 0
         self.line_thickness = 1
@@ -90,13 +89,6 @@ class ImageProcessor:
         self.duplicate_scale = 1.0
 
     def process_image(self, image):
-        """
-        1) Convert to grayscale
-        2) Compute alpha using threshold + tolerance
-        3) Create a binary mask from alpha >= 128 => black
-        4) Scribble on the binary mask
-        5) Optionally do morphological closing
-        """
         mask = self.binarize_line_art(image)
         scribbled = self.draw_rough_contours(
             mask,
@@ -111,20 +103,12 @@ class ImageProcessor:
         return scribbled
 
     def binarize_line_art(self, bgr_image):
-        """
-        1) Convert bgr -> gray
-        2) Compute alpha = compute_line_alpha_soft_threshold(gray, black_threshold, tolerance)
-        3) Create mask: alpha >= 128 => 255
-        """
         gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
         alpha_soft = compute_line_alpha_soft_threshold(gray, self.black_threshold, self.tolerance)
         mask = np.where(alpha_soft >= 128, 255, 0).astype(np.uint8)
         return mask
 
     def apply_join_distance(self, scribbled, distance):
-        """
-        Post-process morphological closing on the scribbled result.
-        """
         gray = cv2.cvtColor(scribbled, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
         kernel = np.ones((distance, distance), np.uint8)
@@ -134,9 +118,6 @@ class ImageProcessor:
         return final
 
     def draw_rough_contours(self, mask, step=2, noise=3, thickness=2, passes=1, color=(0, 0, 0)):
-        """
-        Standard scribble logic with duplication.
-        """
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         height, width = mask.shape
         canvas = np.ones((height, width, 3), dtype=np.uint8) * 255
@@ -148,10 +129,8 @@ class ImageProcessor:
                     continue
                 sampled_pts = self.resample_contour(contour, step=step)
                 rough_pts = self.roughen_contour(sampled_pts, noise=noise)
-                # Draw the full rough contour
                 for i in range(len(rough_pts) - 1):
                     cv2.line(canvas, rough_pts[i], rough_pts[i+1], color, thickness, cv2.LINE_AA)
-                # Segment-based duplication
                 n = len(rough_pts)
                 start = 0
                 while start < n - 1:
@@ -205,15 +184,12 @@ class ImageProcessor:
     def duplicate_contour(self, points):
         pts_np = np.array(points, dtype=np.float32)
         centroid = np.mean(pts_np, axis=0)
-
         random_angle = random.uniform(-5, 5)
         random_scale = random.uniform(0.95, 1.05)
         final_scale = random_scale * self.duplicate_scale
-
         rad = np.deg2rad(random_angle)
         cos_a = np.cos(rad)
         sin_a = np.sin(rad)
-
         dup_pts = []
         for pt in pts_np:
             offset = pt - centroid
@@ -222,7 +198,6 @@ class ImageProcessor:
             y_new = offset[0] * sin_a + offset[1] * cos_a
             new_pt = centroid + [x_new, y_new]
             dup_pts.append((int(new_pt[0]), int(new_pt[1])))
-
         return np.array(dup_pts, dtype=np.int32).tolist()
 
 class ProcessWorker(QThread):
@@ -231,7 +206,6 @@ class ProcessWorker(QThread):
         super().__init__()
         self.image = image
         self.processor = processor
-
     def run(self):
         result = self.processor.process_image(self.image)
         self.finished.emit(result)
@@ -239,17 +213,15 @@ class ProcessWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Line Rougher v1.0 -q7")
+        self.setWindowTitle("Line Rougher v1.1 -q7")
         self.processor = ImageProcessor()
-        self.image = None
-        self.processed_image = None
-
+        self.image = None         # Source image (BGR)
+        self.processed_image = None  # Scribbled image (BGR)
         self.worker = None
         self.preview_timer = QTimer()
         self.preview_timer.setSingleShot(True)
         self.preview_timer.setInterval(200)
         self.preview_timer.timeout.connect(self.run_processing)
-
         self.setup_ui()
 
     def setup_ui(self):
@@ -257,13 +229,16 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
 
-        # Graphics View for preview
+        # Graphics view for live preview.
         self.graphics_view = QGraphicsView()
         self.scene = QGraphicsScene()
         self.graphics_view.setScene(self.scene)
         self.main_layout.addWidget(self.graphics_view)
 
-        # Add controls: black_threshold, tolerance, step, noise, thickness, passes, join_distance, duplication_chance, duplicate_scale
+        # Checkbox for viewer overlay.
+        self.checkbox_viewer_overlay = QCheckBox("Show Rough on Source")
+        self.checkbox_viewer_overlay.stateChanged.connect(self.refresh_preview)
+        self.main_layout.addWidget(self.checkbox_viewer_overlay)
 
         def add_control(label_text, min_val, max_val, initial, callback):
             layout = QHBoxLayout()
@@ -283,50 +258,34 @@ class MainWindow(QMainWindow):
             return layout
 
         controls_layout = QVBoxLayout()
-
-        # Black Threshold
         controls_layout.addLayout(add_control(
             "Black Threshold:", 0, 255, self.processor.black_threshold,
             lambda v: self.update_param("black_threshold", v)
         ))
-
-        # Tolerance
         controls_layout.addLayout(add_control(
             "Tolerance:", 0, 100, self.processor.tolerance,
             lambda v: self.update_param("tolerance", v)
         ))
-
-        # Step
         controls_layout.addLayout(add_control(
             "Step:", 1, 20, self.processor.step_size,
             lambda v: self.update_param("step_size", v)
         ))
-
-        # Noise
         controls_layout.addLayout(add_control(
             "Noise:", 0, 30, self.processor.noise_amount,
             lambda v: self.update_param("noise_amount", v)
         ))
-
-        # Thickness
         controls_layout.addLayout(add_control(
             "Thickness:", 1, 10, self.processor.line_thickness,
             lambda v: self.update_param("line_thickness", v)
         ))
-
-        # Passes
         controls_layout.addLayout(add_control(
             "Passes:", 1, 10, self.processor.scribble_passes,
             lambda v: self.update_param("scribble_passes", v)
         ))
-
-        # Join Distance
         controls_layout.addLayout(add_control(
             "Join Distance:", 0, 20, self.processor.join_distance,
             lambda v: self.update_param("join_distance", v)
         ))
-
-        # Duplication Chance
         dup_chance_layout = QHBoxLayout()
         dup_chance_label = QLabel("Duplication Chance (%):")
         dup_chance_slider = QSlider(Qt.Horizontal)
@@ -335,17 +294,13 @@ class MainWindow(QMainWindow):
         dup_chance_spin = QSpinBox()
         dup_chance_spin.setRange(0, 100)
         dup_chance_spin.setValue(int(self.processor.duplication_chance * 100))
-        def dup_chance_changed(v):
-            self.update_param("duplication_chance", v / 100.0)
         dup_chance_slider.valueChanged.connect(lambda v: dup_chance_spin.setValue(v))
         dup_chance_spin.valueChanged.connect(lambda v: dup_chance_slider.setValue(v))
-        dup_chance_spin.valueChanged.connect(dup_chance_changed)
+        dup_chance_spin.valueChanged.connect(lambda v: self.update_param("duplication_chance", v / 100.0))
         dup_chance_layout.addWidget(dup_chance_label)
         dup_chance_layout.addWidget(dup_chance_slider)
         dup_chance_layout.addWidget(dup_chance_spin)
         controls_layout.addLayout(dup_chance_layout)
-
-        # Duplicate Scale (50..200 => 0.5..2.0)
         dup_scale_layout = QHBoxLayout()
         dup_scale_label = QLabel("Duplicate Scale (%):")
         dup_scale_slider = QSlider(Qt.Horizontal)
@@ -354,11 +309,9 @@ class MainWindow(QMainWindow):
         dup_scale_spin = QSpinBox()
         dup_scale_spin.setRange(50, 200)
         dup_scale_spin.setValue(int(self.processor.duplicate_scale * 100))
-        def dup_scale_changed(v):
-            self.update_param("duplicate_scale", v / 100.0)
         dup_scale_slider.valueChanged.connect(lambda v: dup_scale_spin.setValue(v))
         dup_scale_spin.valueChanged.connect(lambda v: dup_scale_slider.setValue(v))
-        dup_scale_spin.valueChanged.connect(dup_scale_changed)
+        dup_scale_spin.valueChanged.connect(lambda v: self.update_param("duplicate_scale", v / 100.0))
         dup_scale_layout.addWidget(dup_scale_label)
         dup_scale_layout.addWidget(dup_scale_slider)
         dup_scale_layout.addWidget(dup_scale_spin)
@@ -366,7 +319,11 @@ class MainWindow(QMainWindow):
 
         self.main_layout.addLayout(controls_layout)
 
-        # Buttons
+        # Checkbox for saving overlay.
+        self.checkbox_save_overlay = QCheckBox("Save Rough on Source (No Alpha)")
+        self.main_layout.addWidget(self.checkbox_save_overlay)
+
+        # Buttons layout.
         button_layout = QHBoxLayout()
         self.load_button = QPushButton("Load Image")
         self.load_button.clicked.connect(self.load_image)
@@ -378,13 +335,19 @@ class MainWindow(QMainWindow):
         self.save_config_button.clicked.connect(self.save_config)
         self.load_config_button = QPushButton("Load Config")
         self.load_config_button.clicked.connect(self.load_config_button_clicked)
-
         button_layout.addWidget(self.load_button)
         button_layout.addWidget(self.save_button)
         button_layout.addWidget(self.batch_button)
         button_layout.addWidget(self.save_config_button)
         button_layout.addWidget(self.load_config_button)
         self.main_layout.addLayout(button_layout)
+
+    def refresh_preview(self):
+        """
+        Re-display the current processed image using the current viewer overlay setting.
+        """
+        if self.processed_image is not None:
+            self.on_processing_finished(self.processed_image)
 
     def update_param(self, name, value):
         setattr(self.processor, name, value)
@@ -402,16 +365,19 @@ class MainWindow(QMainWindow):
             self.preview_timer.start()
 
     def save_image(self):
-        if self.processed_image is None:
+        if self.processed_image is None or self.image is None:
             print("No processed image to save.")
             return
-        file_name, _ = QFileDialog.getSaveFileName(
-            self, "Save Image", "", "PNG Files (*.png);;All Files (*)"
-        )
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save Image", "", "PNG Files (*.png);;All Files (*)")
         if file_name:
-            black_alpha = to_black_alpha(self.processed_image)
-            cv2.imwrite(file_name, black_alpha)
-            print(f"Saved scribbled image (black+alpha) to {file_name}")
+            if self.checkbox_save_overlay.isChecked():
+                overlay = multiply_blend(self.image, self.processed_image)
+                cv2.imwrite(file_name, overlay)
+                print(f"Saved overlaid image to {file_name}")
+            else:
+                black_alpha = to_black_alpha(self.processed_image)
+                cv2.imwrite(file_name, black_alpha)
+                print(f"Saved scribbled image (black+alpha) to {file_name}")
 
     def batch_process(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder")
@@ -427,10 +393,13 @@ class MainWindow(QMainWindow):
                         continue
                     img = composite_alpha_to_white(img)
                     processed = self.processor.process_image(img)
-                    black_alpha = to_black_alpha(processed)
+                    if self.checkbox_save_overlay.isChecked():
+                        result = multiply_blend(img, processed)
+                    else:
+                        result = to_black_alpha(processed)
                     out_name = os.path.splitext(file)[0] + ".png"
                     output_path = os.path.join(output_folder, out_name)
-                    cv2.imwrite(output_path, black_alpha)
+                    cv2.imwrite(output_path, result)
             print(f"Batch processing completed. Output in '{output_folder}'.")
 
     def save_config(self):
@@ -445,18 +414,14 @@ class MainWindow(QMainWindow):
             "duplication_chance": self.processor.duplication_chance,
             "duplicate_scale": self.processor.duplicate_scale
         }
-        file_name, _ = QFileDialog.getSaveFileName(
-            self, "Save Config", "config.json", "JSON Files (*.json)"
-        )
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save Config", "config.json", "JSON Files (*.json)")
         if file_name:
             with open(file_name, "w") as f:
                 json.dump(config, f, indent=4)
             print(f"Config saved to {file_name}")
 
     def load_config_button_clicked(self):
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, "Load Config", "", "JSON Files (*.json)"
-        )
+        file_name, _ = QFileDialog.getOpenFileName(self, "Load Config", "", "JSON Files (*.json)")
         if file_name:
             self.load_config(file_name)
 
@@ -485,7 +450,6 @@ class MainWindow(QMainWindow):
     def reinitialize_ui(self):
         self.main_layout.removeWidget(self.graphics_view)
         self.graphics_view.deleteLater()
-
         self.setup_ui()
         self.main_layout.insertWidget(0, self.graphics_view)
         self.graphics_view.setScene(self.scene)
@@ -502,8 +466,11 @@ class MainWindow(QMainWindow):
 
     def on_processing_finished(self, result):
         self.processed_image = result
-        # Convert to RGB for preview
-        image_rgb = cv2.cvtColor(self.processed_image, cv2.COLOR_BGR2RGB)
+        if self.checkbox_viewer_overlay.isChecked() and self.image is not None:
+            display_img = multiply_blend(self.image, self.processed_image)
+        else:
+            display_img = self.processed_image
+        image_rgb = cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB)
         h, w, ch = image_rgb.shape
         bytes_per_line = ch * w
         qimg = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
@@ -511,6 +478,10 @@ class MainWindow(QMainWindow):
         self.scene.clear()
         self.scene.addPixmap(pixmap)
         self.graphics_view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def refresh_preview(self):
+        if self.processed_image is not None:
+            self.on_processing_finished(self.processed_image)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -521,19 +492,19 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     dark_palette = QPalette()
-    dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.Base, QColor(42, 42, 42))
-    dark_palette.setColor(QPalette.AlternateBase, QColor(66, 66, 66))
-    dark_palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.ToolTipText, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.Text, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.Button, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
-    dark_palette.setColor(QPalette.Link, QColor(208, 42, 218))
-    dark_palette.setColor(QPalette.Highlight, QColor(208, 42, 218))
-    dark_palette.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
+    dark_palette.setColor(QPalette.Window, QColor(53,53,53))
+    dark_palette.setColor(QPalette.WindowText, QColor(255,255,255))
+    dark_palette.setColor(QPalette.Base, QColor(42,42,42))
+    dark_palette.setColor(QPalette.AlternateBase, QColor(66,66,66))
+    dark_palette.setColor(QPalette.ToolTipBase, QColor(255,255,255))
+    dark_palette.setColor(QPalette.ToolTipText, QColor(255,255,255))
+    dark_palette.setColor(QPalette.Text, QColor(255,255,255))
+    dark_palette.setColor(QPalette.Button, QColor(53,53,53))
+    dark_palette.setColor(QPalette.ButtonText, QColor(255,255,255))
+    dark_palette.setColor(QPalette.BrightText, QColor(255,0,0))
+    dark_palette.setColor(QPalette.Link, QColor(208,42,218))
+    dark_palette.setColor(QPalette.Highlight, QColor(208,42,218))
+    dark_palette.setColor(QPalette.HighlightedText, QColor(0,0,0))
     app.setPalette(dark_palette)
 
     window = MainWindow()
