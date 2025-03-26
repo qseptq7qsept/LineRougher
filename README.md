@@ -20,7 +20,7 @@ Line Rougher is a tool that converts clean line art into a stylized, scribbled v
 
 ## Dependencies
 
-All dependencies required for Threshold Scribbler will be automatically installed in a Python virtual environment via the provided `install.bat` script:
+All dependencies required for LineRougher will be automatically installed in a Python virtual environment via the provided `install.bat` script:
 
 - opencv-python
 - numpy
@@ -47,10 +47,7 @@ Additionally, you will need:
    ```
 
 4. **Run the Installation Script:**  
-   Navigate into the cloned repository folder and execute `install.bat` to set up the virtual environment and install dependencies:
-   ```bat
-   install.bat
-   ```
+   Navigate into the cloned repository folder and execute `install.bat` to set up the virtual environment and install dependencies.
 
 ## Usage
 
