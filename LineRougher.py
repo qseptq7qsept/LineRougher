@@ -4,10 +4,11 @@ import json
 import cv2
 import numpy as np
 import random
+import subprocess
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QSpinBox, QSlider, QFileDialog, QGraphicsScene, QGraphicsView, QCheckBox
+    QLabel, QPushButton, QSpinBox, QSlider, QFileDialog, QGraphicsScene, QGraphicsView, QCheckBox, QInputDialog
 )
 from PySide6.QtGui import QImage, QPixmap, QPalette, QColor
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
@@ -213,7 +214,7 @@ class ProcessWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Line Rougher v1.1 -q7")
+        self.setWindowTitle("Line Rougher v1.2 -q7")
         self.processor = ImageProcessor()
         self.image = None         # Source image (BGR)
         self.processed_image = None  # Scribbled image (BGR)
@@ -335,17 +336,18 @@ class MainWindow(QMainWindow):
         self.save_config_button.clicked.connect(self.save_config)
         self.load_config_button = QPushButton("Load Config")
         self.load_config_button.clicked.connect(self.load_config_button_clicked)
+        # New button for video-to-image sequence conversion.
+        self.vid2seq_button = QPushButton("Video to Image Seq")
+        self.vid2seq_button.clicked.connect(self.vid2seq)
         button_layout.addWidget(self.load_button)
         button_layout.addWidget(self.save_button)
         button_layout.addWidget(self.batch_button)
         button_layout.addWidget(self.save_config_button)
         button_layout.addWidget(self.load_config_button)
+        button_layout.addWidget(self.vid2seq_button)
         self.main_layout.addLayout(button_layout)
 
     def refresh_preview(self):
-        """
-        Re-display the current processed image using the current viewer overlay setting.
-        """
         if self.processed_image is not None:
             self.on_processing_finished(self.processed_image)
 
@@ -479,14 +481,37 @@ class MainWindow(QMainWindow):
         self.scene.addPixmap(pixmap)
         self.graphics_view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
-    def refresh_preview(self):
-        if self.processed_image is not None:
-            self.on_processing_finished(self.processed_image)
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.scene.items():
             self.graphics_view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def vid2seq(self):
+        # Open file dialog to select a video file.
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select Video", "", "Video Files (*.mp4 *.avi *.mov)")
+        if not file_name:
+            return
+        # Popup to set the sequence name.
+        sequence_name, ok = QInputDialog.getText(self, "Sequence Name", "Enter sequence name:", text="UserInput")
+        if not ok or not sequence_name:
+            return
+        source_folder = os.path.dirname(file_name)
+
+        # Use the script's directory to build the ffmpeg path.
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        ffmpeg_path = os.path.join(script_dir, "ffmpeg", "ffmpeg.exe")
+
+        # Create a subfolder for the output images.
+        output_folder = os.path.join(source_folder, sequence_name)
+        os.makedirs(output_folder, exist_ok=True)
+        
+        # Build the output pattern.
+        output_pattern = os.path.join(output_folder, f"{sequence_name}_%04d.png")
+        
+        # Build and run the ffmpeg command.
+        command = f'"{ffmpeg_path}" -i "{file_name}" "{output_pattern}"'
+        subprocess.run(command, shell=True)
+        print(f"Video conversion completed. Images saved as {sequence_name}_XXXX.png in {output_folder}.")
 
 def main():
     app = QApplication(sys.argv)
