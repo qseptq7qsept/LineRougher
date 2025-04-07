@@ -110,13 +110,53 @@ class ImageProcessor:
         return mask
 
     def apply_join_distance(self, scribbled, distance):
+        """
+        Connects isolated dots by drawing thin lines between their centroids,
+        and duplicates these connecting segments using duplicate_contour.
+        
+        Parameters:
+        scribbled: The BGR image output from the scribbling process.
+        distance: Maximum distance between centroids to consider joining them.
+        """
+        # Convert to grayscale and create an inverted binary image.
         gray = cv2.cvtColor(scribbled, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
-        kernel = np.ones((distance, distance), np.uint8)
-        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-        final = np.ones_like(scribbled, dtype=np.uint8) * 255
-        final[closed == 255] = [0, 0, 0]
-        return final
+        
+        # Find contours in the binary image.
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # List to store centroids of small contours (isolated dots).
+        centroids = []
+        area_threshold = 20  # Adjust this threshold based on your image characteristics.
+        
+        # Process each contour: only consider small contours as isolated dots.
+        for cnt in contours:
+            if cv2.contourArea(cnt) < area_threshold:
+                M = cv2.moments(cnt)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    centroids.append((cx, cy))
+        
+        # Create a copy of the original scribbled image to overlay connecting lines.
+        output = scribbled.copy()
+        
+        # Connect centroids that are within the join distance.
+        for i in range(len(centroids)):
+            for j in range(i + 1, len(centroids)):
+                p1 = centroids[i]
+                p2 = centroids[j]
+                if np.hypot(p1[0] - p2[0], p1[1] - p2[1]) <= distance:
+                    # Draw the base connecting line.
+                    cv2.line(output, p1, p2, (0, 0, 0), 1, cv2.LINE_AA)
+                    
+                    # Duplicate the connecting segment using duplicate_contour.
+                    dup_segment = self.duplicate_contour([p1, p2])
+                    # Draw the duplicate if a valid segment is returned.
+                    if len(dup_segment) >= 2:
+                        cv2.line(output, dup_segment[0], dup_segment[-1], (0, 0, 0), 1, cv2.LINE_AA)
+        
+        return output
 
     def draw_rough_contours(self, mask, step=2, noise=3, thickness=2, passes=1, color=(0, 0, 0)):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -214,7 +254,7 @@ class ProcessWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Line Rougher v1.2 -q7")
+        self.setWindowTitle("Line Rougher v1.3 -q7")
         self.processor = ImageProcessor()
         self.image = None         # Source image (BGR)
         self.processed_image = None  # Scribbled image (BGR)
